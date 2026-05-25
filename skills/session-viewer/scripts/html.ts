@@ -47,6 +47,16 @@ export function buildSessionViewerHtml(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${htmlEscape(document?.title ?? "Session Viewer")}</title>
+<script>
+(() => {
+  try {
+    const stored = localStorage.getItem("session-viewer-theme") || "system";
+    const dark = stored === "dark" || (stored === "system" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    document.documentElement.style.colorScheme = dark ? "dark" : "light";
+  } catch {}
+})();
+</script>
 <style>
 :root {
   --bg: #f4f4f4;
@@ -65,6 +75,11 @@ export function buildSessionViewerHtml(
   --user-bubble: #e9e9e9;
   --mark: #d9d9d9;
   --shadow: 0 1px 2px rgba(0, 0, 0, .05), 0 10px 30px rgba(0, 0, 0, .07);
+  --control: #ffffff;
+  --control-hover: #efefef;
+  --radius: 10px;
+  --radius-sm: 7px;
+  --ring: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 :root[data-theme="dark"] {
   --bg: #151515;
@@ -83,6 +98,8 @@ export function buildSessionViewerHtml(
   --user-bubble: #262626;
   --mark: #3a3a3a;
   --shadow: 0 1px 2px rgba(0, 0, 0, .25), 0 14px 34px rgba(0, 0, 0, .32);
+  --control: #262626;
+  --control-hover: #303030;
 }
 * { box-sizing: border-box; }
 body {
@@ -96,7 +113,7 @@ body {
   letter-spacing: 0;
 }
 button, input, select { font: inherit; letter-spacing: 0; }
-#app { display: grid; grid-template-columns: 320px minmax(0, 1fr); min-height: 100vh; }
+#app { display: grid; grid-template-columns: 324px minmax(0, 1fr); min-height: 100vh; }
 aside {
   position: sticky;
   top: 0;
@@ -105,71 +122,160 @@ aside {
   border-right: 1px solid var(--hair);
   background: var(--sidebar);
   backdrop-filter: blur(14px);
-  padding: 12px;
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
+aside::-webkit-scrollbar { width: 10px; }
+aside::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 32%, transparent); border-radius: 999px; border: 3px solid transparent; background-clip: padding-box; }
+aside::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--muted) 55%, transparent); background-clip: padding-box; }
 main { min-width: 0; padding: 22px clamp(16px, 4vw, 56px) 80px; }
-.brand { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-.brand h1 { margin: 0; font-size: 16px; line-height: 1.1; }
-.brand span { color: var(--muted); font-size: 12px; }
+.brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.brand h1 { margin: 0; font-size: 15px; font-weight: 700; line-height: 1.1; letter-spacing: .01em; }
+.brand span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  padding: 3px 8px;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--panel-2);
+}
+.brand span:empty { display: none; }
 .loader {
   border: 1px dashed var(--hair);
+  border-radius: var(--radius);
   background: var(--sidebar-2);
-  padding: 8px;
-  margin-bottom: 10px;
+  padding: 10px;
 }
-.loader input { width: 100%; font-size: 12px; color: var(--muted); }
-.controls { display: grid; gap: 8px; margin-bottom: 10px; }
-.search-row { display: flex; gap: 6px; }
-#search { width: 100%; border: 1px solid var(--hair); background: var(--panel); color: var(--ink); padding: 6px 8px; outline-color: var(--accent); min-height: 32px; }
+#file-input { width: 100%; font-size: 12px; color: var(--muted); cursor: pointer; }
+#file-input::file-selector-button {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--control);
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  margin-right: 10px;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease;
+}
+#file-input::file-selector-button:hover { background: var(--control-hover); border-color: var(--muted); }
+.controls { display: grid; gap: 9px; }
+.search-row { display: flex; gap: 7px; }
+#search {
+  width: 100%;
+  border: 1px solid var(--hair);
+  background: var(--control);
+  color: var(--ink);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  min-height: 36px;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+#search::placeholder { color: var(--muted); }
 .theme-select {
   width: 100%;
   border: 1px solid var(--hair);
-  background: var(--panel);
+  background: var(--control);
   color: var(--ink);
-  padding: 6px 8px;
-  min-height: 32px;
-}
-.filters { display: flex; flex-wrap: wrap; gap: 5px; }
-.show-system { width: max-content; }
-.chip, .icon-btn {
-  border: 1px solid var(--hair);
-  background: var(--panel);
-  color: var(--ink);
-  padding: 4px 7px;
+  padding: 8px 34px 8px 12px;
+  min-height: 36px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  min-height: 28px;
-  font-size: 12px;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  transition: border-color .15s ease, box-shadow .15s ease;
 }
+.filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.show-system { width: 100%; }
+.chip, .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--hair);
+  background: var(--control);
+  color: var(--ink);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-height: 30px;
+  font-size: 12px;
+  font-weight: 500;
+  transition: background .15s ease, border-color .15s ease, color .15s ease, transform .08s ease;
+}
+.chip:hover, .icon-btn:hover { background: var(--control-hover); border-color: var(--muted); }
+.chip:active, .icon-btn:active { transform: translateY(1px); }
 .chip[aria-pressed="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
-.icon-btn { min-width: 30px; }
+.chip[aria-pressed="true"]:hover { background: var(--ink); border-color: var(--ink); }
+.icon-btn { min-width: 36px; padding: 6px; border-radius: var(--radius-sm); color: var(--muted); }
+.chip:focus-visible, .icon-btn:focus-visible, #search:focus-visible, .theme-select:focus-visible, #file-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
 .meta, .stats {
   border: 1px solid var(--hair);
+  border-radius: var(--radius);
   background: var(--sidebar-2);
-  padding: 8px;
+  padding: 11px 12px;
   font-size: 11px;
-  color: var(--muted);
-  margin-bottom: 10px;
+  color: var(--ink);
+  display: grid;
+  gap: 6px;
 }
-.meta div, .stats div { overflow-wrap: anywhere; margin: 3px 0; }
-.timeline { display: grid; gap: 1px; }
+.meta div, .stats div { display: flex; align-items: baseline; gap: 10px; overflow-wrap: anywhere; }
+.stats div { justify-content: space-between; font-variant-numeric: tabular-nums; }
+.meta div b, .stats div b {
+  flex: none;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  white-space: nowrap;
+}
+.timeline { display: flex; flex-direction: column; gap: 2px; }
 .nav-item {
+  position: relative;
   width: 100%;
   display: grid;
-  grid-template-columns: 56px minmax(0, 1fr);
-  gap: 7px;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 9px;
   align-items: baseline;
   text-align: left;
   border: 0;
-  border-left: 3px solid transparent;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--ink);
-  padding: 4px 5px;
+  padding: 6px 9px;
   cursor: pointer;
-  opacity: .9;
+  transition: background .12s ease;
 }
-.nav-item:hover { background: color-mix(in srgb, var(--accent) 13%, transparent); border-left-color: var(--accent); opacity: 1; }
-.nav-kind { color: var(--muted); font-size: 9px; text-transform: uppercase; font-weight: 700; }
-.nav-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.nav-item::before {
+  content: "";
+  position: absolute;
+  left: 1px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background .12s ease;
+}
+.nav-item:hover { background: color-mix(in srgb, var(--accent) 11%, transparent); }
+.nav-item:hover::before { background: var(--accent); }
+.nav-item:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+.nav-kind { color: var(--muted); font-size: 9px; text-transform: uppercase; font-weight: 700; letter-spacing: .04em; }
+.nav-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--muted); }
+.nav-item:hover .nav-title { color: var(--ink); }
 .header {
   max-width: 920px;
   margin: 0 auto 30px;
@@ -383,6 +489,7 @@ mark { background: var(--mark); color: var(--ink); padding: 0 1px; }
   max-width: 760px;
   margin: 100px auto;
   border: 1px dashed var(--hair);
+  border-radius: var(--radius);
   background: var(--panel);
   padding: 28px;
 }
@@ -446,6 +553,7 @@ mark { background: var(--mark); color: var(--ink); padding: 0 1px; }
   const viewModeStorageKey = "session-viewer-view-mode";
   const defaultFilters = filters.filter((filter) => filter !== "system" && filter !== "event");
   const state = { doc: null, enabled: new Set(defaultFilters), homePath: "", query: "", showRaw: false, theme: localStorage.getItem(themeStorageKey) || "system", viewMode: localStorage.getItem(viewModeStorageKey) || "reader" };
+  let searchTimer = 0;
   const $ = (id) => document.getElementById(id);
   const escapeHtml = (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
   const shortenHomePaths = (value) => {
@@ -470,6 +578,7 @@ mark { background: var(--mark); color: var(--ink); padding: 0 1px; }
   const applyTheme = () => {
     const resolved = state.theme === "system" ? (systemDark() ? "dark" : "light") : state.theme;
     document.documentElement.dataset.theme = resolved;
+    document.documentElement.style.colorScheme = resolved;
     $("theme-select").value = state.theme;
   };
   const compact = (parts) => parts.map((p) => String(p ?? "").trim()).filter(Boolean).join("\\n\\n");
@@ -690,11 +799,14 @@ mark { background: var(--mark); color: var(--ink); padding: 0 1px; }
     }
     return { format, title: meta.id || meta.summary || name, meta, events: expandMemoryCitations(events), warnings: [] };
   };
+  const indexEvent = (event) => {
+    const imageText = Array.isArray(event.images) ? event.images.map((image) => [image.alt, image.detail, image.src].join(" ")).join("\\n") : "";
+    event.searchText = [event.title, event.role, event.text, shortenHomePaths(event.text), imageText, event.toolName, event.callId].join("\\n").toLowerCase();
+  };
+  const indexDoc = (doc) => (doc?.events ?? []).forEach(indexEvent);
   const matches = (event) => {
     if (!state.query) return true;
-    const imageText = Array.isArray(event.images) ? event.images.map((image) => [image.alt, image.detail, image.src].join(" ")).join("\\n") : "";
-    const haystack = [event.title, event.role, event.text, shortenHomePaths(event.text), imageText, event.toolName, event.callId, JSON.stringify(event.raw ?? ""), shortenHomePaths(JSON.stringify(event.raw ?? ""))].join("\\n").toLowerCase();
-    return haystack.includes(state.query.toLowerCase());
+    return String(event.searchText ?? "").includes(state.query);
   };
   const isVisible = (event) => state.query ? matches(event) : state.enabled.has(event.kind);
   const isContextPacket = (event) => {
@@ -923,9 +1035,12 @@ mark { background: var(--mark); color: var(--ink); padding: 0 1px; }
     $("timeline").innerHTML = navItems.slice(0, 600).map((item) => '<button class="nav-item" data-jump="' + escapeHtml(item.id) + '"><span class="nav-kind">' + escapeHtml(item.kind) + '</span><span class="nav-title">' + escapeHtml(item.title) + '</span></button>').join("");
     const content = state.viewMode === "reader" ? readerItems.map(renderReaderItem).join("") : visible.map((event) => renderEvent(event)).join("");
     $("events").innerHTML = doc && content ? content : '<div class="empty"><h2>No session loaded</h2><p>Choose a JSONL file in the sidebar.</p></div>';
-    if (state.query) document.querySelectorAll("details").forEach((d) => { if (d.textContent.toLowerCase().includes(state.query.toLowerCase())) d.open = true; });
   };
-  const loadDoc = (doc) => { state.doc = doc; state.homePath = inferHomePath(doc); state.enabled = new Set(defaultFilters); renderFilters(); render(); };
+  const scheduleRender = () => {
+    window.clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(render, 120);
+  };
+  const loadDoc = (doc) => { indexDoc(doc); state.doc = doc; state.homePath = inferHomePath(doc); state.enabled = new Set(defaultFilters); renderFilters(); render(); };
   const renderFilters = () => {
     $("filters").innerHTML = filters.filter((filter) => filter !== "system").map((filter) => '<button class="chip" data-filter="' + filter + '" aria-pressed="' + state.enabled.has(filter) + '">' + filter.replace("_", " ") + '</button>').join("");
     $("show-system").textContent = state.enabled.has("system") ? "Hide system events" : "Show system events";
@@ -947,7 +1062,7 @@ mark { background: var(--mark); color: var(--ink); padding: 0 1px; }
     const button = event.target.closest("[data-jump]");
     if (button) document.getElementById(button.dataset.jump)?.scrollIntoView({ block: "start", behavior: "smooth" });
   });
-  $("search").addEventListener("input", (event) => { state.query = event.target.value; render(); });
+  $("search").addEventListener("input", (event) => { state.query = event.target.value.trim().toLowerCase(); scheduleRender(); });
   $("clear-search").addEventListener("click", () => { state.query = ""; $("search").value = ""; render(); });
   $("theme-select").addEventListener("change", (event) => {
     state.theme = event.target.value;
