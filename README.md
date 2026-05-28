@@ -1,6 +1,6 @@
-![Agent Skills banner](docs/assets/readme-banner.jpg)
-
 # OpenClaw Agent Skills
+
+![Agent Skills banner](docs/assets/readme-banner.jpg)
 
 Shared skills for coding agents that work on OpenClaw projects.
 
