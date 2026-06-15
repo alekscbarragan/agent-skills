@@ -115,6 +115,119 @@ def subprocess_env(extra: dict[str, str] | None) -> dict[str, str] | None:
     return merged
 
 
+def parse_ps_time(value: str) -> float:
+    try:
+        day_text, clock = value.strip().split("-", 1) if "-" in value else ("0", value.strip())
+        parts = clock.split(":")
+        if not parts or len(parts) > 3:
+            return 0.0
+        total = float(parts[-1])
+        if len(parts) >= 2:
+            total += int(parts[-2]) * 60
+        if len(parts) == 3:
+            total += int(parts[-3]) * 3600
+        return int(day_text) * 86400 + total
+    except (IndexError, ValueError):
+        return 0.0
+
+
+def process_pids(repo: Path, pid: int) -> list[str]:
+    ps = find_command("ps", repo)
+    if not ps:
+        return [str(pid)]
+    result = subprocess.run(
+        [ps, "-A", "-o", "pid=", "-o", "ppid="],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if result.returncode != 0:
+        return [str(pid)]
+    pids = [str(pid)]
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1] == str(pid):
+            pids.append(fields[0])
+    return pids
+
+
+def sample_process_metrics(repo: Path, pid: int) -> tuple[float, float, int, str] | None:
+    ps = find_command("ps", repo)
+    if not ps:
+        return None
+    try:
+        result = subprocess.run(
+            [
+                ps,
+                "-o",
+                "state=",
+                "-o",
+                "rss=",
+                "-o",
+                "time=",
+                "-p",
+                ",".join(process_pids(repo, pid)),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+
+    cpu_seconds = 0.0
+    rss_kb = 0
+    states: list[str] = []
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) < 3:
+            continue
+        states.append(fields[0][:1] or "?")
+        try:
+            rss_kb += int(fields[1])
+        except ValueError:
+            pass
+        cpu_seconds += parse_ps_time(fields[2])
+    if not states:
+        return None
+    return (time.monotonic(), cpu_seconds, rss_kb, ",".join(sorted(set(states))))
+
+
+def format_process_metrics(
+    previous: tuple[float, float, int, str] | None,
+    current: tuple[float, float, int, str] | None,
+) -> str:
+    if current is None:
+        return ""
+    interval = max(0.0, current[0] - previous[0]) if previous else 0.0
+    cpu_delta = max(0.0, current[1] - previous[1]) if previous else 0.0
+    cpu_percent = (cpu_delta / interval * 100) if interval > 0 else 0.0
+    rss_mb = int(round(current[2] / 1024))
+    interval_seconds = int(interval) if interval else 0
+    return (
+        f" cpu={cpu_delta:.1f}s/{interval_seconds}s({cpu_percent:.0f}%)"
+        f" rss={rss_mb}M state={current[3]}"
+    )
+
+
+def emit_heartbeat(
+    label: str,
+    repo: Path,
+    started: float,
+    proc: subprocess.Popen,
+    metrics: tuple[float, float, int, str] | None,
+) -> tuple[float, float, int, str] | None:
+    elapsed = int(time.monotonic() - started)
+    next_metrics = sample_process_metrics(repo, proc.pid)
+    metrics_text = format_process_metrics(metrics, next_metrics)
+    print(f"review still running: {label} elapsed={elapsed}s pid={proc.pid}{metrics_text}", file=sys.stderr, flush=True)
+    return next_metrics or metrics
+
+
 def opencode_review_config(web_search: bool = True) -> dict[str, Any]:
     permission: dict[str, Any] = {
         "*": "deny",
@@ -172,7 +285,9 @@ def run_with_heartbeat(
     stream_output: bool = False,
     stream_display: Callable[[str, str], str | None] | None = None,
     env: dict[str, str] | None = None,
+    resolve_root: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    resolve_root = resolve_root or cwd
     if stream_output:
         return run_with_stream(
             args,
@@ -182,6 +297,7 @@ def run_with_heartbeat(
             heartbeat_seconds=heartbeat_seconds,
             stream_display=stream_display,
             env=env,
+            resolve_root=resolve_root,
         )
     started = time.monotonic()
     proc = subprocess.Popen(
@@ -194,6 +310,7 @@ def run_with_heartbeat(
         env=subprocess_env(env),
     )
     first_communicate = True
+    metrics = sample_process_metrics(resolve_root, proc.pid)
     while True:
         try:
             stdout, stderr = proc.communicate(
@@ -203,8 +320,7 @@ def run_with_heartbeat(
             return subprocess.CompletedProcess(args, int(proc.returncode or 0), stdout, stderr)
         except subprocess.TimeoutExpired:
             first_communicate = False
-            elapsed = int(time.monotonic() - started)
-            print(f"review still running: {label} elapsed={elapsed}s pid={proc.pid}", file=sys.stderr, flush=True)
+            metrics = emit_heartbeat(label, resolve_root, started, proc, metrics)
 
 
 def run_with_stream(
@@ -216,6 +332,7 @@ def run_with_stream(
     heartbeat_seconds: int,
     stream_display: Callable[[str, str], str | None] | None,
     env: dict[str, str] | None = None,
+    resolve_root: Path,
 ) -> subprocess.CompletedProcess[str]:
     started = time.monotonic()
     proc = subprocess.Popen(
@@ -256,14 +373,14 @@ def run_with_stream(
         thread.start()
     stdin_thread = threading.Thread(target=write_stdin, daemon=True)
     stdin_thread.start()
+    metrics = sample_process_metrics(resolve_root, proc.pid)
 
     open_streams = 2
     while open_streams:
         try:
             name, line = events.get(timeout=heartbeat_seconds)
         except queue.Empty:
-            elapsed = int(time.monotonic() - started)
-            print(f"review still running: {label} elapsed={elapsed}s pid={proc.pid}", file=sys.stderr, flush=True)
+            metrics = emit_heartbeat(label, resolve_root, started, proc, metrics)
             continue
         if line is None:
             open_streams -= 1
@@ -805,7 +922,7 @@ def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         )
         if args.web_search:
             cmd.append("--allow-all-urls")
-        result = run_with_heartbeat(cmd, Path(tempdir), label="copilot", stream_output=args.stream_engine_output)
+        result = run_with_heartbeat(cmd, Path(tempdir), label="copilot", stream_output=args.stream_engine_output, resolve_root=repo)
     if result.returncode != 0:
         raise SystemExit(f"copilot engine failed ({result.returncode})\n{result.stderr or result.stdout}")
     return result.stdout
@@ -840,6 +957,7 @@ def run_opencode(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             label="opencode",
             stream_output=args.stream_engine_output,
             env=opencode_review_env(args.web_search),
+            resolve_root=repo,
         )
     if result.returncode != 0:
         raise SystemExit(f"opencode engine failed ({result.returncode})\n{result.stderr or result.stdout}")
@@ -868,6 +986,7 @@ def run_pi(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             input_text=prompt,
             label="pi",
             stream_output=args.stream_engine_output,
+            resolve_root=repo,
         )
     if result.returncode != 0:
         raise SystemExit(f"pi engine failed ({result.returncode})\n{result.stderr or result.stdout}")
@@ -1306,10 +1425,12 @@ def self_test_engine_isolation() -> int:
         opencode_bin = root / "opencode"
         record_path = root / "record.json"
         pi_invocations_path = root / "pi-invocations.jsonl"
+        hostile_ps_path = root / "hostile-ps-ran"
         write_executable(codex_bin, fake_codex_script())
         write_executable(claude_bin, fake_claude_script())
         write_executable(pi_bin, fake_pi_script())
         write_executable(opencode_bin, fake_opencode_script())
+        write_executable(repo / "ps", f"#!/usr/bin/env python3\nfrom pathlib import Path\nPath({str(hostile_ps_path)!r}).write_text('ran')\n")
 
         args = argparse.Namespace(
             codex_bin=str(codex_bin),
@@ -1326,7 +1447,13 @@ def self_test_engine_isolation() -> int:
 
         os.environ["AUTOREVIEW_FAKE_RECORD"] = str(record_path)
         os.environ["AUTOREVIEW_FAKE_PI_INVOCATIONS"] = str(pi_invocations_path)
+        old_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = f"{repo}{os.pathsep}{old_path}"
         try:
+            sample_process_metrics(repo, os.getpid())
+            if hostile_ps_path.exists():
+                raise SystemExit("heartbeat metrics isolation self-test failed: repo-local ps executed")
+
             run_codex(args, repo, "review hostile patch")
             codex_record = json.loads(record_path.read_text())
             codex_argv = codex_record["argv"]
@@ -1400,6 +1527,8 @@ def self_test_engine_isolation() -> int:
             for disabled_tool in ("bash", "edit", "skill", "task", "todowrite", "write"):
                 if config.get("tools", {}).get(disabled_tool) is not False:
                     raise SystemExit(f"opencode isolation self-test failed: {disabled_tool} tool not disabled")
+            if hostile_ps_path.exists():
+                raise SystemExit("heartbeat metrics isolation self-test failed: repo-local ps executed")
 
             os.environ["AUTOREVIEW_FAKE_CLAUDE_VERSION"] = "2.1.168 (Claude Code)"
             try:
@@ -1443,6 +1572,7 @@ def self_test_engine_isolation() -> int:
             os.environ.pop("AUTOREVIEW_FAKE_PI_VERSION", None)
             os.environ.pop("AUTOREVIEW_FAKE_PI_HELP", None)
             os.environ.pop("AUTOREVIEW_FAKE_PI_INVOCATIONS", None)
+            os.environ["PATH"] = old_path
 
     if parse_cli_version("2.1.169 (Claude Code)") != CLAUDE_SAFE_MODE_MIN_VERSION:
         raise SystemExit("claude version parsing self-test failed")
@@ -1663,6 +1793,32 @@ def self_test_opencode_jsonl_parser() -> None:
     print("autoreview opencode jsonl parser self-test: ok")
 
 
+def self_test_heartbeat_metrics() -> None:
+    cases = {
+        "": 0.0,
+        "garbage": 0.0,
+        "12": 12.0,
+        "01:02": 62.0,
+        "01:02.5": 62.5,
+        "01:02:03": 3723.0,
+        "2-01:02:03": 176523.0,
+    }
+    for value, expected in cases.items():
+        actual = parse_ps_time(value)
+        if actual != expected:
+            raise SystemExit(f"heartbeat metrics self-test failed: parse_ps_time({value!r})={actual!r}")
+
+    previous = (10.0, 3.0, 1024, "S")
+    current = (70.0, 18.0, 1536, "R,S")
+    expected = " cpu=15.0s/60s(25%) rss=2M state=R,S"
+    actual = format_process_metrics(previous, current)
+    if actual != expected:
+        raise SystemExit(f"heartbeat metrics self-test failed: {actual!r}")
+    if format_process_metrics(previous, None) != "":
+        raise SystemExit("heartbeat metrics self-test failed: missing sample should not add output")
+    print("autoreview heartbeat metrics self-test: ok")
+
+
 def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str], required: list[str]) -> None:
     allowed_top = {"findings", "overall_correctness", "overall_explanation", "overall_confidence"}
     extra_top = set(report) - allowed_top
@@ -1852,6 +2008,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--self-test-fallback-scope", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--self-test-engine-isolation", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--self-test-json-array-parser", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--self-test-heartbeat-metrics", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.engine not in ENGINES:
         raise SystemExit(f"invalid --engine/AUTOREVIEW_ENGINE: {args.engine}")
@@ -2261,6 +2418,9 @@ def main() -> int:
         return 0
     if args.self_test_fallback_scope:
         self_test_fallback_scope()
+        return 0
+    if args.self_test_heartbeat_metrics:
+        self_test_heartbeat_metrics()
         return 0
     if args.self_test_engine_isolation:
         return self_test_engine_isolation()
