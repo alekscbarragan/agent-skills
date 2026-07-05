@@ -165,6 +165,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             "credentials.txt",
             "client-secret.csv",
             ".docker/config.json",
+            "deployment/.docker/config.json",
         ):
             with self.subTest(rel=rel):
                 self.assertIsNotNone(
