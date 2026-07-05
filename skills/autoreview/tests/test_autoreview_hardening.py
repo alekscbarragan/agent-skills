@@ -178,8 +178,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
         )
 
         self.assertTrue(
-            self.helper["secret_text_risk"](
-                self.helper["unified_diff_content"](patch)
+            any(
+                self.helper["secret_text_risk"](content)
+                for content in self.helper["unified_diff_contents"](patch)
             )
         )
 
@@ -200,8 +201,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
         )
 
         self.assertFalse(
-            self.helper["secret_text_risk"](
-                self.helper["unified_diff_content"](patch)
+            any(
+                self.helper["secret_text_risk"](content)
+                for content in self.helper["unified_diff_contents"](patch)
             )
         )
 
@@ -215,10 +217,33 @@ class AutoreviewHardeningTests(unittest.TestCase):
         )
 
         self.assertTrue(
-            self.helper["secret_text_risk"](
-                self.helper["unified_diff_content"](patch)
+            any(
+                self.helper["secret_text_risk"](content)
+                for content in self.helper["unified_diff_contents"](patch)
             )
         )
+
+    def test_normalized_secret_scan_separates_old_and_new_values(self) -> None:
+        value = "Correct-Horse!" + "@Battery$Staple"
+        patch = (
+            "@@ -1,2 +1,2 @@\n"
+            " password:\n"
+            "-  placeholder\n"
+            '+  "' + value + '"\n'
+        )
+
+        self.assertTrue(
+            any(
+                self.helper["secret_text_risk"](content)
+                for content in self.helper["unified_diff_contents"](patch)
+            )
+        )
+
+    def test_secret_detector_handles_compound_json_keys(self) -> None:
+        for key in ("client_secret", "refresh_token"):
+            content = '{"' + key + '": "' + "a" * 24 + '"}'
+            with self.subTest(key=key):
+                self.assertTrue(self.helper["secret_text_risk"](content))
 
     def test_secret_like_patch_content_is_blocked_in_all_modes(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

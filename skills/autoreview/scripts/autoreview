@@ -96,7 +96,10 @@ TRACKED_SENSITIVE_NAME_PATTERNS = [
 SECRET_VALUE_PATTERNS = [
     re.compile(r"-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP )?PRIVATE KEY-----"),
     re.compile(
-        r"(?i)[\"']?(api[_-]?key|token|secret|password)[\"']?\s*[:=]\s*"
+        r"(?i)(?:"
+        r"[\"'][A-Za-z0-9_-]{0,64}(?:api[_-]?key|token|secret|password)[A-Za-z0-9_-]{0,64}[\"']"
+        r"|[A-Za-z0-9_-]{0,64}(?:api[_-]?key|token|secret|password)[A-Za-z0-9_-]{0,64}"
+        r")\s*[:=]\s*"
         r"(?:[\"'][^\"'\r\n]{12,}[\"']|"
         r"[A-Za-z0-9_./+=:@#$%&*!?-]{20,}(?![A-Za-z0-9_./+=:@#$%&*!?()\-]))"
     ),
@@ -830,25 +833,38 @@ def require_no_secret_values(label: str, text: str) -> None:
         )
 
 
-def unified_diff_content(patch: str) -> str:
-    content: list[str] = []
+def unified_diff_contents(patch: str) -> tuple[str, str]:
+    old_content: list[str] = []
+    new_content: list[str] = []
     in_hunk = False
     prefix_columns = 1
     for line in patch.splitlines():
         hunk_header = re.match(r"^(@{2,})", line)
         if hunk_header:
-            content.append(";")
+            old_content.append(";")
+            new_content.append(";")
             in_hunk = True
             prefix_columns = len(hunk_header.group(1)) - 1
             continue
         if line.startswith("diff --"):
-            content.append(";")
+            old_content.append(";")
+            new_content.append(";")
             in_hunk = False
             continue
         prefix = line[:prefix_columns]
         if in_hunk and len(prefix) == prefix_columns and set(prefix) <= {"+", "-", " "}:
-            content.append(line[prefix_columns:])
-    return "\n".join(content)
+            content = line[prefix_columns:]
+            if set(prefix) == {" "}:
+                old_content.append(content)
+                new_content.append(content)
+            elif "+" in prefix and "-" not in prefix:
+                new_content.append(content)
+            elif "-" in prefix and "+" not in prefix:
+                old_content.append(content)
+            else:
+                old_content.append(content)
+                new_content.append(content)
+    return "\n".join(old_content), "\n".join(new_content)
 
 
 def sensitive_repo_path_risk(rel: str) -> str | None:
@@ -898,7 +914,8 @@ def validate_review_patch(
             f"{details}{more}"
         )
     require_no_secret_values(label, patch)
-    require_no_secret_values(label, unified_diff_content(patch))
+    for content in unified_diff_contents(patch):
+        require_no_secret_values(label, content)
     if len(patch) > limit:
         raise SystemExit(
             f"{label} is too large to review safely "
