@@ -59,12 +59,23 @@ SENSITIVE_PATH_PARTS = {
     "private",
     "secrets",
 }
+TRACKED_SENSITIVE_PATH_PARTS = SENSITIVE_PATH_PARTS - {"private"}
 SENSITIVE_NAME_PATTERNS = [
     re.compile(r"(^|/)\.env($|[._/-])", re.IGNORECASE),
     re.compile(r"(^|/)(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.pub)?$", re.IGNORECASE),
     re.compile(r"\.(pem|p12|pfx|key)$", re.IGNORECASE),
     re.compile(
         r"(^|/)[^/]*(secret|token|credential|credentials|service[-_]?account|private[-_]?key|apikey|api[-_]?key)[^/]*$",
+        re.IGNORECASE,
+    ),
+]
+TRACKED_SENSITIVE_NAME_PATTERNS = [
+    re.compile(r"(^|/)\.env(?:\.(?!(?:example|sample|template)$)[^/]+)?$", re.IGNORECASE),
+    re.compile(r"(^|/)(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.pub)?$", re.IGNORECASE),
+    re.compile(r"\.(pem|p12|pfx|key)$", re.IGNORECASE),
+    re.compile(
+        r"(^|/)(secret|secrets|credential|credentials|service[-_]?account|private[-_]?key|api[-_]?key|token)"
+        r"(?:\.(json|ya?ml|toml|ini|conf|config))?$",
         re.IGNORECASE,
     ),
 ]
@@ -812,6 +823,16 @@ def sensitive_repo_path_risk(rel: str) -> str | None:
     return None
 
 
+def tracked_sensitive_repo_path_risk(rel: str) -> str | None:
+    normalized = rel.replace(os.sep, "/")
+    parts = {part.lower() for part in Path(normalized).parts}
+    if "/.config/gcloud/" in f"/{normalized.lower()}/" or parts & TRACKED_SENSITIVE_PATH_PARTS:
+        return "sensitive path"
+    if any(pattern.search(normalized) for pattern in TRACKED_SENSITIVE_NAME_PATTERNS):
+        return "sensitive filename"
+    return None
+
+
 def validate_review_patch(
     label: str,
     paths: list[str],
@@ -821,7 +842,7 @@ def validate_review_patch(
     blocked = [
         f"{rel} ({risk})"
         for rel in paths
-        if (risk := sensitive_repo_path_risk(rel)) is not None
+        if (risk := tracked_sensitive_repo_path_risk(rel)) is not None
     ]
     if blocked:
         details = "\n".join(f"- {item}" for item in blocked[:20])

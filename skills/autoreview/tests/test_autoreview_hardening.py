@@ -120,6 +120,17 @@ class AutoreviewHardeningTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "tracked sensitive paths"):
                 self.helper["commit_bundle"](repo, "HEAD")
 
+    def test_tracked_source_names_and_env_templates_remain_reviewable(self) -> None:
+        for rel in (
+            "tokenizer.py",
+            "token_count.ts",
+            "password_validator.go",
+            ".env.example",
+            "private/parser.py",
+        ):
+            with self.subTest(rel=rel):
+                self.assertIsNone(self.helper["tracked_sensitive_repo_path_risk"](rel))
+
     def test_secret_like_patch_content_is_blocked_in_all_modes(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
