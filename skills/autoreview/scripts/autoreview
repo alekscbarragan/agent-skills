@@ -77,8 +77,12 @@ TRACKED_SENSITIVE_NAME_PATTERNS = [
     re.compile(r"(^|/)(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.pub)?$", re.IGNORECASE),
     re.compile(r"\.(pem|p12|pfx|key)$", re.IGNORECASE),
     re.compile(
-        r"(^|/)(secret|secrets|credential|credentials|service[-_]?account|private[-_]?key|api[-_]?key|token)"
-        r"(?:\.(json|ya?ml|toml|ini|conf|config))?$",
+        r"(^|/)(secret|secrets|credential|credentials|service[-_]?account|private[-_]?key|api[-_]?key)"
+        r"(?:$|\.(json|ya?ml|toml|ini|conf|config)$|[._-][^/]*\.(json|ya?ml|toml|ini|conf|config)$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(^|/)token(?:$|\.(json|ya?ml|toml|ini|conf|config)$)",
         re.IGNORECASE,
     ),
 ]

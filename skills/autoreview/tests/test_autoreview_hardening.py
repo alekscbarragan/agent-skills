@@ -139,6 +139,18 @@ class AutoreviewHardeningTests(unittest.TestCase):
                     "sensitive filename",
                 )
 
+    def test_suffixed_credential_data_paths_remain_sensitive(self) -> None:
+        for rel in (
+            "credentials-prod.json",
+            "service-account-dev.yaml",
+            "api-key.backup.json",
+        ):
+            with self.subTest(rel=rel):
+                self.assertEqual(
+                    self.helper["tracked_sensitive_repo_path_risk"](rel),
+                    "sensitive filename",
+                )
+
     def test_secret_detector_handles_quoted_json_keys(self) -> None:
         content = '{"' + 'api_key": "' + "a" * 24 + '"}'
 
