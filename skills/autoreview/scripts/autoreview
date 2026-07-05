@@ -59,7 +59,7 @@ SENSITIVE_PATH_PARTS = {
     "private",
     "secrets",
 }
-TRACKED_SENSITIVE_PATH_PARTS = SENSITIVE_PATH_PARTS - {"private"}
+TRACKED_SENSITIVE_PATH_PARTS = SENSITIVE_PATH_PARTS - {"private", ".docker"}
 TRACKED_CREDENTIAL_DIR_PATTERN = re.compile(
     r"^(?:.*[._-])?"
     r"(secret|secrets|credential|credentials|service[-_]?account|private[-_]?key|api[-_]?key)"
@@ -89,7 +89,7 @@ TRACKED_SENSITIVE_NAME_PATTERNS = [
     re.compile(
         r"(^|/)(?:[^/]*[._-])?"
         r"(secret|secrets|credential|credentials|service[-_]?account|private[-_]?key|api[-_]?key|token|tokens)"
-        r"(?:[._-][^/]*)?\.(json|ya?ml|toml|ini|conf|config)$",
+        r"(?:[._-][^/]*)?\.(json|ya?ml|toml|ini|conf|config|txt|csv)$",
         re.IGNORECASE,
     ),
 ]
@@ -886,6 +886,7 @@ def tracked_sensitive_repo_path_risk(rel: str) -> str | None:
     )
     if (
         "/.config/gcloud/" in f"/{normalized.lower()}/"
+        or normalized.lower() == ".docker/config.json"
         or parts & TRACKED_SENSITIVE_PATH_PARTS
         or credential_dir
     ):

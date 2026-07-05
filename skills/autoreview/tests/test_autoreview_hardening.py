@@ -129,6 +129,8 @@ class AutoreviewHardeningTests(unittest.TestCase):
             "private/parser.py",
             "design-tokens/colors.json",
             "token_count/generated.py",
+            ".docker/Dockerfile",
+            ".docker/scripts/build.sh",
         ):
             with self.subTest(rel=rel):
                 self.assertIsNone(self.helper["tracked_sensitive_repo_path_risk"](rel))
@@ -160,6 +162,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
             "credentials/prod.json",
             "prod-credentials/client.conf",
             "client-secrets/account.ini",
+            "credentials.txt",
+            "client-secret.csv",
+            ".docker/config.json",
         ):
             with self.subTest(rel=rel):
                 self.assertIsNotNone(
