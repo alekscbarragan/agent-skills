@@ -127,6 +127,8 @@ class AutoreviewHardeningTests(unittest.TestCase):
             "password_validator.go",
             ".env.example",
             "private/parser.py",
+            "design-tokens/colors.json",
+            "token_count/generated.py",
         ):
             with self.subTest(rel=rel):
                 self.assertIsNone(self.helper["tracked_sensitive_repo_path_risk"](rel))
@@ -188,9 +190,16 @@ class AutoreviewHardeningTests(unittest.TestCase):
         for content in (
             "token = secrets.token_urlsafe(32)",
             'password = payload.get("password")',
+            'token_endpoint = "https://accounts.example.com/oauth2/token"',
+            'password_policy = "minimum-twelve-characters"',
         ):
             with self.subTest(content=content):
                 self.assertFalse(self.helper["secret_text_risk"](content))
+
+    def test_secret_detector_handles_bare_call_keyword_values(self) -> None:
+        content = "client(api_key=" + "a" * 24 + ")"
+
+        self.assertTrue(self.helper["secret_text_risk"](content))
 
     def test_normalized_secret_scan_does_not_cross_hunks(self) -> None:
         patch = (
