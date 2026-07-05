@@ -60,6 +60,10 @@ SENSITIVE_PATH_PARTS = {
     "secrets",
 }
 TRACKED_SENSITIVE_PATH_PARTS = SENSITIVE_PATH_PARTS - {"private"}
+TRACKED_CREDENTIAL_DIR_PATTERN = re.compile(
+    r"^(secret|secrets|credential|credentials|service[-_]?account|private[-_]?key|api[-_]?key|token|tokens)$",
+    re.IGNORECASE,
+)
 SENSITIVE_NAME_PATTERNS = [
     re.compile(r"(^|/)\.env($|[._/-])", re.IGNORECASE),
     re.compile(r"(^|/)(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.pub)?$", re.IGNORECASE),
@@ -77,13 +81,13 @@ TRACKED_SENSITIVE_NAME_PATTERNS = [
     re.compile(r"(^|/)(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.pub)?$", re.IGNORECASE),
     re.compile(r"\.(pem|p12|pfx|key)$", re.IGNORECASE),
     re.compile(
-        r"(^|/)(secret|secrets|credential|credentials|service[-_]?account|private[-_]?key|api[-_]?key)"
-        r"(?:$|\.(json|ya?ml|toml|ini|conf|config)$|[._-][^/]*\.(json|ya?ml|toml|ini|conf|config)$)",
+        r"(^|/)(secret|secrets|credential|credentials|service[-_]?account|private[-_]?key|api[-_]?key|token|tokens)$",
         re.IGNORECASE,
     ),
     re.compile(
-        r"(^|/)(?:tokens?$|(?:[^/]*[._-])?tokens?(?:[._-][^/]*)?"
-        r"\.(json|ya?ml|toml|ini|conf|config)$)",
+        r"(^|/)(?:[^/]*[._-])?"
+        r"(secret|secrets|credential|credentials|service[-_]?account|private[-_]?key|api[-_]?key|token|tokens)"
+        r"(?:[._-][^/]*)?\.(json|ya?ml|toml|ini|conf|config)$",
         re.IGNORECASE,
     ),
 ]
@@ -91,7 +95,7 @@ SECRET_VALUE_PATTERNS = [
     re.compile(r"-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP )?PRIVATE KEY-----"),
     re.compile(
         r"(?i)[\"']?(api[_-]?key|token|secret|password)[\"']?\s*[:=]\s*"
-        r"(?:[\"'][A-Za-z0-9_./+=-]{12,}[\"']|[A-Za-z0-9_+=/-]{20,})"
+        r"(?:[\"'][^\"'\r\n]{12,}[\"']|[^\s,;]{20,})"
     ),
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._-]{20,}"),
     re.compile(r"\b(?:sk|rk|pk|org|proj)-[A-Za-z0-9_-]{20,}\b"),
@@ -823,6 +827,21 @@ def require_no_secret_values(label: str, text: str) -> None:
         )
 
 
+def unified_diff_content(patch: str) -> str:
+    content: list[str] = []
+    in_hunk = False
+    for line in patch.splitlines():
+        if line.startswith("@@"):
+            in_hunk = True
+            continue
+        if line.startswith("diff --git "):
+            in_hunk = False
+            continue
+        if in_hunk and line[:1] in {"+", "-", " "}:
+            content.append(line[1:])
+    return "\n".join(content)
+
+
 def sensitive_repo_path_risk(rel: str) -> str | None:
     normalized = rel.replace(os.sep, "/")
     if path_has_sensitive_part(normalized):
@@ -834,8 +853,17 @@ def sensitive_repo_path_risk(rel: str) -> str | None:
 
 def tracked_sensitive_repo_path_risk(rel: str) -> str | None:
     normalized = rel.replace(os.sep, "/")
-    parts = {part.lower() for part in Path(normalized).parts}
-    if "/.config/gcloud/" in f"/{normalized.lower()}/" or parts & TRACKED_SENSITIVE_PATH_PARTS:
+    path_parts = Path(normalized).parts
+    parts = {part.lower() for part in path_parts}
+    credential_dir = any(
+        TRACKED_CREDENTIAL_DIR_PATTERN.fullmatch(part)
+        for part in path_parts[:-1]
+    )
+    if (
+        "/.config/gcloud/" in f"/{normalized.lower()}/"
+        or parts & TRACKED_SENSITIVE_PATH_PARTS
+        or credential_dir
+    ):
         return "sensitive path"
     if any(pattern.search(normalized) for pattern in TRACKED_SENSITIVE_NAME_PATTERNS):
         return "sensitive filename"
@@ -861,6 +889,7 @@ def validate_review_patch(
             f"{details}{more}"
         )
     require_no_secret_values(label, patch)
+    require_no_secret_values(label, unified_diff_content(patch))
     if len(patch) > limit:
         raise SystemExit(
             f"{label} is too large to review safely "

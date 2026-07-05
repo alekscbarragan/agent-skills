@@ -134,9 +134,8 @@ class AutoreviewHardeningTests(unittest.TestCase):
     def test_tracked_env_variants_remain_sensitive(self) -> None:
         for rel in (".env-local", ".env_prod", ".env/production"):
             with self.subTest(rel=rel):
-                self.assertEqual(
-                    self.helper["tracked_sensitive_repo_path_risk"](rel),
-                    "sensitive filename",
+                self.assertIsNotNone(
+                    self.helper["tracked_sensitive_repo_path_risk"](rel)
                 )
 
     def test_suffixed_credential_data_paths_remain_sensitive(self) -> None:
@@ -147,17 +146,34 @@ class AutoreviewHardeningTests(unittest.TestCase):
             "token-prod.json",
             "tokens.json",
             "auth-token.yaml",
+            "prod-credentials.json",
+            "google-service-account.json",
+            "client-secret.yaml",
+            "credentials/prod.json",
         ):
             with self.subTest(rel=rel):
-                self.assertEqual(
-                    self.helper["tracked_sensitive_repo_path_risk"](rel),
-                    "sensitive filename",
+                self.assertIsNotNone(
+                    self.helper["tracked_sensitive_repo_path_risk"](rel)
                 )
 
     def test_secret_detector_handles_quoted_json_keys(self) -> None:
         content = '{"' + 'api_key": "' + "a" * 24 + '"}'
 
         self.assertTrue(self.helper["secret_text_risk"](content))
+
+    def test_secret_detector_handles_punctuation_and_multiline_diff_values(self) -> None:
+        value = "Correct-Horse!" + "@Battery$Staple"
+        patch = (
+            "@@ -1 +1,2 @@\n"
+            '+"api_key":\n'
+            '+  "' + value + '"\n'
+        )
+
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                self.helper["unified_diff_content"](patch)
+            )
+        )
 
     def test_secret_like_patch_content_is_blocked_in_all_modes(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
