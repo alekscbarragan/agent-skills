@@ -730,11 +730,10 @@ def bounded(text: str, limit: int = 180_000) -> str:
 
 
 def ensure_reviewer_input_complete(reviewer: argparse.Namespace, input_truncated: bool) -> None:
-    can_recover_full_diff = reviewer.tools and reviewer.engine == "codex"
-    if input_truncated and not can_recover_full_diff:
+    if input_truncated:
         raise SystemExit(
             f"{reviewer.engine} engine refused truncated review input because it cannot recover omitted diff hunks; "
-            "reduce the change/input size or choose codex with tools enabled"
+            "reduce the change/input size"
         )
 
 
@@ -804,6 +803,42 @@ def require_no_secret_values(label: str, text: str) -> None:
         )
 
 
+def sensitive_repo_path_risk(rel: str) -> str | None:
+    normalized = rel.replace(os.sep, "/")
+    if path_has_sensitive_part(normalized):
+        return "sensitive path"
+    if any(pattern.search(normalized) for pattern in SENSITIVE_NAME_PATTERNS):
+        return "sensitive filename"
+    return None
+
+
+def validate_review_patch(
+    label: str,
+    paths: list[str],
+    patch: str,
+    limit: int = MAX_BUNDLE_TEXT_BYTES,
+) -> str:
+    blocked = [
+        f"{rel} ({risk})"
+        for rel in paths
+        if (risk := sensitive_repo_path_risk(rel)) is not None
+    ]
+    if blocked:
+        details = "\n".join(f"- {item}" for item in blocked[:20])
+        more = f"\n... {len(blocked) - 20} more" if len(blocked) > 20 else ""
+        raise SystemExit(
+            f"refusing to include tracked sensitive paths in {label}:\n"
+            f"{details}{more}"
+        )
+    require_no_secret_values(label, patch)
+    if len(patch) > limit:
+        raise SystemExit(
+            f"{label} is too large to review safely "
+            f"({len(patch)} characters; limit {limit}); split the change into smaller review targets"
+        )
+    return patch
+
+
 def file_bundle_risk(
     repo: Path,
     path: Path,
@@ -812,11 +847,9 @@ def file_bundle_risk(
     allow_binary_omission: bool = False,
 ) -> str | None:
     normalized = rel.replace(os.sep, "/")
-    if path_has_sensitive_part(normalized):
-        return "sensitive path"
-    for pattern in SENSITIVE_NAME_PATTERNS:
-        if pattern.search(normalized):
-            return "sensitive filename"
+    path_risk = sensitive_repo_path_risk(normalized)
+    if path_risk:
+        return path_risk
     if path.is_symlink():
         return "symlink"
     try:
@@ -869,18 +902,35 @@ def local_status(repo: Path, untracked: list[str]) -> str:
 def local_bundle(repo: Path) -> tuple[str, bool]:
     staged_patch = git(repo, "diff", *SAFE_DIFF_FLAGS, "--cached", "--patch")
     unstaged_patch = git(repo, "diff", *SAFE_DIFF_FLAGS, "--patch")
+    staged_paths = git_path_list(
+        repo,
+        "diff",
+        *SAFE_DIFF_FLAGS,
+        "--name-only",
+        "--cached",
+        "-z",
+    )
+    unstaged_paths = git_path_list(
+        repo,
+        "diff",
+        *SAFE_DIFF_FLAGS,
+        "--name-only",
+        "-z",
+    )
     untracked = safe_untracked_files(repo)
     if not staged_patch.strip() and not unstaged_patch.strip() and not untracked:
         raise SystemExit("no local changes to review")
+    staged_patch = validate_review_patch("local staged diff", staged_paths, staged_patch)
+    unstaged_patch = validate_review_patch("local unstaged diff", unstaged_paths, unstaged_patch)
     parts = [
         "# Git Status",
         local_status(repo, untracked),
         "# Staged Diff",
         git(repo, "diff", *SAFE_DIFF_FLAGS, "--cached", "--stat"),
-        bounded(staged_patch),
+        staged_patch,
         "# Unstaged Diff",
         git(repo, "diff", *SAFE_DIFF_FLAGS, "--stat"),
-        bounded(unstaged_patch),
+        unstaged_patch,
     ]
     input_truncated = len(staged_patch) > 180_000 or len(unstaged_patch) > 180_000
     if untracked:
@@ -895,14 +945,25 @@ def local_bundle(repo: Path) -> tuple[str, bool]:
 
 def branch_bundle(repo: Path, base_ref: str) -> tuple[str, bool]:
     base_ref = validate_git_ref(repo, base_ref, "base")
+    diff_range = f"{base_ref}...HEAD"
     branch_patch = git(
         repo,
         "diff",
         *SAFE_DIFF_FLAGS,
         "--patch",
         "--end-of-options",
-        f"{base_ref}...HEAD",
+        diff_range,
     )
+    branch_paths = git_path_list(
+        repo,
+        "diff",
+        *SAFE_DIFF_FLAGS,
+        "--name-only",
+        "-z",
+        "--end-of-options",
+        diff_range,
+    )
+    branch_patch = validate_review_patch("branch diff", branch_paths, branch_patch)
     return "\n\n".join(
         [
             "# Branch Diff",
@@ -913,9 +974,9 @@ def branch_bundle(repo: Path, base_ref: str) -> tuple[str, bool]:
                 *SAFE_DIFF_FLAGS,
                 "--stat",
                 "--end-of-options",
-                f"{base_ref}...HEAD",
+                diff_range,
             ),
-            bounded(branch_patch),
+            branch_patch,
         ]
     ), len(branch_patch) > 180_000
 
@@ -931,6 +992,17 @@ def commit_bundle(repo: Path, commit_ref: str) -> tuple[str, bool]:
         "--end-of-options",
         commit_ref,
     )
+    commit_paths = git_path_list(
+        repo,
+        "show",
+        *SAFE_DIFF_FLAGS,
+        "--name-only",
+        "--format=",
+        "-z",
+        "--end-of-options",
+        commit_ref,
+    )
+    commit_patch = validate_review_patch("commit diff", commit_paths, commit_patch)
     return "\n\n".join(
         [
             "# Commit Diff",
@@ -944,7 +1016,7 @@ def commit_bundle(repo: Path, commit_ref: str) -> tuple[str, bool]:
                 "--end-of-options",
                 commit_ref,
             ),
-            bounded(commit_patch),
+            commit_patch,
         ]
     ), len(commit_patch) > 180_000
 
@@ -3160,7 +3232,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--opencode-bin", default=os.environ.get("OPENCODE_BIN", "opencode"))
     parser.add_argument("--pi-bin", default=os.environ.get("PI_BIN", "pi"))
-    parser.add_argument("--no-tools", dest="tools", action="store_false", default=True, help="Disable tools for engines that support it. Codex, copilot, opencode, and cursor reject no-tools review.")
+    parser.add_argument("--no-tools", dest="tools", action="store_false", default=True, help="Disable tools for engines that support it. Codex, Droid, copilot, opencode, and cursor reject no-tools review.")
     parser.add_argument("--self-test", action="store_true", help="Run deterministic local autoreview self-tests.")
     parser.add_argument("--self-test-opencode-jsonl-parser", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--self-test-opencode-isolation", action="store_true", help=argparse.SUPPRESS)

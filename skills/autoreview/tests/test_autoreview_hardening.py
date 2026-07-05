@@ -97,10 +97,48 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
             self.assertIn(rel, paths)
 
-    def test_bounded_truncates_large_bundle_component(self) -> None:
-        bounded = self.helper["bounded"]("x" * 25, 10)
+    def test_review_patch_rejects_oversized_content(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "too large to review safely"):
+            self.helper["validate_review_patch"]("local staged diff", ["safe.txt"], "x" * 25, 10)
 
-        self.assertEqual(bounded, "x" * 10 + "\n\n[truncated at 10 characters]\n")
+    def test_tracked_sensitive_paths_are_blocked_in_all_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            (repo / "base.txt").write_text("base\n", encoding="utf-8")
+            git(repo, "add", "base.txt")
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD").strip()
+
+            (repo / ".env").write_text("placeholder=true\n", encoding="utf-8")
+            git(repo, "add", ".env")
+            with self.assertRaisesRegex(SystemExit, "tracked sensitive paths"):
+                self.helper["local_bundle"](repo)
+
+            git(repo, "commit", "-q", "-m", "sensitive path")
+            with self.assertRaisesRegex(SystemExit, "tracked sensitive paths"):
+                self.helper["branch_bundle"](repo, base)
+            with self.assertRaisesRegex(SystemExit, "tracked sensitive paths"):
+                self.helper["commit_bundle"](repo, "HEAD")
+
+    def test_secret_like_patch_content_is_blocked_in_all_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            path = repo / "settings.txt"
+            path.write_text("base\n", encoding="utf-8")
+            git(repo, "add", "settings.txt")
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD").strip()
+
+            path.write_text("api" + "_key=" + "a" * 24 + "\n", encoding="utf-8")
+            git(repo, "add", "settings.txt")
+            with self.assertRaisesRegex(SystemExit, "secret-like content"):
+                self.helper["local_bundle"](repo)
+
+            git(repo, "commit", "-q", "-m", "secret content")
+            with self.assertRaisesRegex(SystemExit, "secret-like content"):
+                self.helper["branch_bundle"](repo, base)
+            with self.assertRaisesRegex(SystemExit, "secret-like content"):
+                self.helper["commit_bundle"](repo, "HEAD")
 
     def test_pi_refuses_truncated_review_input(self) -> None:
         reviewer = argparse.Namespace(engine="pi", tools=True)
@@ -115,10 +153,11 @@ class AutoreviewHardeningTests(unittest.TestCase):
             reviewer,
             False,
         )
-        self.helper["ensure_reviewer_input_complete"](
-            argparse.Namespace(engine="codex", tools=True),
-            True,
-        )
+        with self.assertRaisesRegex(SystemExit, "codex engine refused truncated review input"):
+            self.helper["ensure_reviewer_input_complete"](
+                argparse.Namespace(engine="codex", tools=True),
+                True,
+            )
         with self.assertRaisesRegex(SystemExit, "claude engine refused truncated review input"):
             self.helper["ensure_reviewer_input_complete"](
                 argparse.Namespace(engine="claude", tools=True),
