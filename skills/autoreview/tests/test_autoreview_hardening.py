@@ -132,7 +132,13 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 self.assertIsNone(self.helper["tracked_sensitive_repo_path_risk"](rel))
 
     def test_tracked_env_variants_remain_sensitive(self) -> None:
-        for rel in (".env-local", ".env_prod", ".env/production"):
+        for rel in (
+            ".env-local",
+            ".env_prod",
+            ".env/production",
+            ".env/example/production",
+            ".env/template/prod",
+        ):
             with self.subTest(rel=rel):
                 self.assertIsNotNone(
                     self.helper["tracked_sensitive_repo_path_risk"](rel)
@@ -176,6 +182,14 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 self.helper["unified_diff_content"](patch)
             )
         )
+
+    def test_secret_detector_does_not_treat_code_expressions_as_values(self) -> None:
+        for content in (
+            "token = secrets.token_urlsafe(32)",
+            'password = payload.get("password")',
+        ):
+            with self.subTest(content=content):
+                self.assertFalse(self.helper["secret_text_risk"](content))
 
     def test_normalized_secret_scan_does_not_cross_hunks(self) -> None:
         patch = (
