@@ -687,6 +687,12 @@ Important Blacksmith footguns:
 
 - Always run from repo root. The CLI syncs the current directory.
 - Raw commit SHAs are not reliable `warmup --ref` refs; use a branch or tag.
+- Current autoreview uses a short POSIX temp home for
+  `OPENCLAW_TESTBOX=1 --parallel-tests` because Blacksmith puts an SSH control
+  socket below that home. With an older helper on macOS, prefix the outer
+  autoreview process with `TMPDIR=/tmp`; setting it inside the quoted test
+  command happens too late. This is a launcher temp-root issue, not a Crabbox
+  lease setting.
 - If auth is missing and browser auth is acceptable:
 
 ```sh
